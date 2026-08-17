@@ -13,9 +13,9 @@
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   LAB 17 · make verify
   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  run 1/3 … 37.1s
-  run 2/3 … 36.9s
-  run 3/3 … 36.6s
+  run 1/3 … 38.4s
+  run 2/3 … 37.1s
+  run 3/3 … 37.0s
   BẢNG                  ỔN ĐỊNH          SỐ HÀNG     KỲ VỌNG   GHI CHÚ
   ──────────────────────────────────────────────────────────────────────────
   gold_training_set     ✓ ok              12,480      12,480   ✓
@@ -50,7 +50,9 @@
 
 </details>
 
-Tổng kết: **4 / 4 tiêu chí đạt**
+Tổng kết: **4 / 4 tiêu chí đạt** · bài mở rộng B: **ĐẠT** (`make crash-test`)
+
+> Dòng `dashboard rows scanned ✗` thuộc bài mở rộng A trong `EXTRA.md` — không làm bài này, không ảnh hưởng bốn tiêu chí bắt buộc.
 
 ---
 
@@ -98,9 +100,15 @@ Tổng kết: **4 / 4 tiêu chí đạt**
 
 ## 4 · _(mở rộng)_ Bài trong EXTRA.md
 
-|                |           |
-| -------------- | --------- |
-| **Bài đã làm** | không làm |
+| | |
+|---|---|
+| **Bài đã làm** | **B** — consumer bị kill giữa batch |
+| **Triệu chứng** | `make crash-test` kill consumer ở lô 7 trong 40 lô. Sau khi khởi động lại, bảng đích **thiếu** bản ghi so với lượt chạy không sự cố. Không có lỗi nào được ném ra và offset vẫn hợp lệ, nên không có tín hiệu nào cho biết dữ liệu đã mất. |
+| **Nguyên nhân** | `consume()` gọi `commit()` **trước** `write_batch()`. Offset là lời cam kết "mọi message tới vị trí này đã xử lý xong", nhưng ở thứ tự đó nó được ghi ra khi việc xử lý *chưa* diễn ra — cam kết đi trước sự thật. Crash trong khoảng giữa hai lệnh làm offset dịch tới hết lô 7 trong khi dữ liệu lô 7 chưa xuống kho; lần restart tua thẳng tới offset đã commit và bỏ qua lô đó vĩnh viễn. Đây là ngữ nghĩa **at-most-once**, và điều khiến nó nguy hiểm là nó mất dữ liệu *im lặng*: không exception, không hàng lẻ, không cách nào phát hiện bằng cách đọc trạng thái cuối. Nguyên nhân sâu hơn là một giả định sai — rằng retry ở tầng giao vận có thể tự bảo đảm đúng-một-lần. Không thể: `exactly-once` không tồn tại ở tầng transport, vì việc dịch offset và việc ghi dữ liệu là hai hệ thống khác nhau, không có transaction chung. Thứ chọn được chỉ là at-least-once cộng với một phép ghi idempotent. |
+| **Cách khắc phục** | `ingest/consumer.py`: (1) đảo thứ tự thành `write_batch()` → `commit()`, chuyển sang **at-least-once** — crash giờ gây trùng thay vì mất, và trùng là loại lỗi sửa được ở tầng ghi; (2) thêm `primary key` cho `event_id` trong `DDL` (DuckDB chỉ chấp nhận `ON CONFLICT` khi cột khoá có ràng buộc), và đổi `INSERT` thuần thành `insert ... on conflict (event_id) do update set ...` để lô được phát lại ghi đè chính nó. Hai phần phải đi cùng nhau: đảo thứ tự mà không có phép ghi idempotent chỉ là đổi lỗi mất thành lỗi trùng. |
+| **Bằng chứng** | trước: bảng thiếu bản ghi sau restart · sau: crash ở lô 7 (offset commit được 3.000), restart ghi tiếp 17.000 → tổng **20.000 hàng / 20.000 `event_id`** khác nhau, khớp chính xác lượt chạy không sự cố (`C == A ✓`), `make crash-test` báo **BÀI MỞ RỘNG B: ĐẠT ✓**. `make verify` vẫn 4/4. |
+
+**`DO UPDATE` khác `DO NOTHING` ở đâu khi message được phát lại với nội dung đã đổi?** `DO NOTHING` giữ nguyên bản ghi đầu tiên và im lặng loại bỏ bản cập nhật — đúng khi message bất biến, nhưng nếu producer sửa nội dung rồi gửi lại cùng `event_id`, kho sẽ vĩnh viễn giữ phiên bản cũ. `DO UPDATE` làm bảng hội tụ về phiên bản mới nhất nhận được, tức idempotent theo *trạng thái* chứ không chỉ theo *số lần*. Tôi chọn `DO UPDATE` vì luồng này mang event có thể được sửa lại từ nguồn, và vì hậu quả của hai lựa chọn không đối xứng: `DO UPDATE` sai nhiều nhất là ghi đè bằng dữ liệu giống hệt, còn `DO NOTHING` sai thì mất một bản cập nhật mà không để lại dấu vết nào.
 
 ---
 
@@ -110,4 +118,5 @@ Tổng kết: **4 / 4 tiêu chí đạt**
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1        | Với mọi model `incremental`, đọc SQL đã biên dịch trong `target/run/` để xem phép ghi thực tế là `INSERT` hay upsert — cấu hình `materialized` một mình không nói lên điều đó. Rồi đối chiếu grain của bảng với khoá tự nhiên đang được khai.      |
 | 2        | Mốc so sánh trong bộ lọc incremental lấy từ đâu: thời điểm **nạp** hay thuộc tính của **dữ liệu**? Và đo phân bố `_ingested_at - event_time` để biết cửa sổ hiện tại có bao nổi độ trễ thực tế không. Bảng ổn định không đồng nghĩa với bảng đúng. |
-| 3        | Tìm mọi phép ép kiểu âm thầm (`try_cast`, `coalesce` che lỗi) và kiểm tra xem có contract cùng test miền giá trị đứng sau chúng không. Pipeline không báo lỗi thường chỉ có nghĩa là không ai đang kiểm tra.                                       |
+| 3        | Tìm mọi phép ép kiểu âm thầm (`try_cast`, `coalesce` che lỗi) và kiểm tra xem có contract cùng test miền giá trị đứng sau chúng không. Pipeline không báo lỗi thường chỉ có nghĩa là không ai đang kiểm tra.      
+| B | Với mọi consumer, xác định thứ tự giữa lệnh commit offset và lệnh ghi dữ liệu trước khi tin vào bất cứ con số nào — thứ tự đó quyết định crash sẽ gây mất hay gây trùng, và chỉ một trong hai là sửa được. |                                 |
