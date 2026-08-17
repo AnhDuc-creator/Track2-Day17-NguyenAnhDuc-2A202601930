@@ -5,22 +5,11 @@ models:
   - name: silver_tickets
     description: "Trạng thái mới nhất của mỗi ticket, dựng từ CDC."
 
-    # =====================================================================
-    # NHIỆM VỤ 3 — phần cuối: bật contract và thêm test
-    # =====================================================================
-    # `contract` của dbt ràng buộc KIỂU dữ liệu: bật lên thì dbt kiểm tra
-    # từng cột đúng data_type khai báo bên dưới, sai là dừng model.
-    #
-    # Nhưng contract KHÔNG ràng buộc MIỀN GIÁ TRỊ — nó vẫn cho priority = 99
-    # đi qua, vì 99 đúng là integer. Miền giá trị là việc của test.
-    # Cần cả hai.
-    #
-    # Việc của bạn:
-    #   1. đổi enforced: false -> true
-    #   2. bỏ comment khối tests: ở cột priority bên dưới và điền `values`
+    # NHIỆM VỤ 3 — contract ràng buộc KIỂU, test ràng buộc MIỀN GIÁ TRỊ.
+    # Cần cả hai: contract một mình vẫn cho priority = 99 đi qua vì 99 là integer.
     config:
       contract:
-        enforced: false # <- TODO(nhiệm vụ 3): đổi thành true
+        enforced: true
 
     columns:
       - name: ticket_id
@@ -36,14 +25,11 @@ models:
       - name: priority
         data_type: integer
         description: "1 = urgent … 4 = low. Contract với team backend."
-        # TODO(nhiệm vụ 3): bỏ comment bốn dòng dưới và điền danh sách giá trị
-        # hợp lệ. `quote: false` vì đây là số, không phải chuỗi.
-        #
-        # tests:
-        #   - not_null
-        #   - accepted_values:
-        #       values: [...]
-        #       quote: false
+        tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4]
+              quote: false
       - name: category
         data_type: varchar
       - name: channel
@@ -68,6 +54,16 @@ models:
     description: >
       Bản ghi CDC bị contract từ chối. Grain: 1 hàng / 1 bản ghi CDC.
       Pipeline KHÔNG dừng khi gặp bản ghi lỗi — nó rơi vào đây.
+    columns:
+      - name: ticket_id
+        tests: [not_null]
+      - name: cdc_seq
+        tests: [not_null]
+      - name: reject_reason
+        description: "Lý do bị loại, để người trực đọc là biết phải làm gì."
+        tests: [not_null]
+      - name: priority_raw
+        description: "Giá trị gốc từ nguồn, giữ nguyên để người trực điều tra."
 
   # ---------------------------------------------------------------- events
   - name: silver_events

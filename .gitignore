@@ -14,3 +14,8 @@ dbt/target/
 dbt/logs/
 dbt/dbt_packages/
 logs/
+
+q.py
+env.ps1
+
+.vscode/
